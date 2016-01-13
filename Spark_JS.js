@@ -1,6 +1,7 @@
 var events = require('events');
 var util = require('util');
-var Queue = require('sync-queue')
+var Queue = require('sync-queue');
+var m = require('mraa');
 var q = new Queue();
 
 var I2C_ADDR = 0x39
@@ -57,6 +58,29 @@ var I2C_ADDR = 0x39
   , GFIFO_R = 0xFF
   , ID_RES = 0xAB
   ;
+
+var ERROR  =0xFF;
+/* Direction definitions */
+var DIR = {
+  DIR_NONE :0,
+  DIR_LEFT :1,
+  DIR_RIGHT:2,
+  DIR_UP:3,
+  DIR_DOWN:4,
+  DIR_NEAR:5,
+  DIR_FAR:6,
+  DIR_ALL:7
+};
+
+/* State definitions */
+var STA = {
+  NA_STATE :0,
+  NEAR_STATE:1,
+  FAR_STATE:2,
+  ALL_STATE:3
+};
+
+
 /* Bit fields */
 var APDS9960_PON    =         1
 var APDS9960_AEN     =        1 << 1
@@ -143,7 +167,7 @@ var gesture_ud_delta_ = 0;
     gesture_far_count_ = 0;
     
     gesture_state_ = 0;
-    gesture_motion_ = DIR_NONE;
+    gesture_motion_ = DIR.DIR_NONE;
 
 var APDS9960_ID_1           =0xAB;
 var APDS9960_ID_2           =0x9C;
@@ -181,7 +205,7 @@ var DEFAULT_GIEN            =0      ; // Disable gesture interrupts
 
 function  init()
 {
-    var id = [];
+    var id = [0];
     //var id;
 
     /* Initialize I2C */
@@ -381,7 +405,7 @@ function wireWriteByte(val)
 function wireWriteDataByte(reg,val)
 {
 
-    i2c.writeReg(reg,val);
+    i2c.writeReg(reg,val[0]);
     // Wire.beginTransmission(APDS9960_I2C_ADDR);
     // Wire.write(reg);
     // Wire.write(val);
@@ -761,10 +785,10 @@ function readGesture()
     
     /* Make sure that power and gesture is on and data is valid */
     // if( !isGestureAvailable() || !(getMode() & 0b01000001) ) {
-    //     return DIR_NONE;
+    //     return DIR.DIR_NONE;
     // }
     if( !isGestureAvailable() || !(getMode() & ((1 << 6)+1)) ) {
-        return DIR_NONE;
+        return DIR.DIR_NONE;
     }
     
     /* Keep looping as long as gesture data is valid */
@@ -811,13 +835,13 @@ function readGesture()
                 /* If at least 1 set of data, sort the data into U/D/L/R */
                 if( bytes_read >= 4 ) {
                     for( i = 0; i < bytes_read; i += 4 ) {
-                        gesture_data_.u_data[gesture_data_.index] = \
+                        gesture_data_.u_data[gesture_data_.index] =
                                                             fifo_data[i + 0];
-                        gesture_data_.d_data[gesture_data_.index] = \
+                        gesture_data_.d_data[gesture_data_.index] =
                                                             fifo_data[i + 1];
-                        gesture_data_.l_data[gesture_data_.index] = \
+                        gesture_data_.l_data[gesture_data_.index] =
                                                             fifo_data[i + 2];
-                        gesture_data_.r_data[gesture_data_.index] = \
+                        gesture_data_.r_data[gesture_data_.index] =
                                                             fifo_data[i + 3];
                         gesture_data_.index++;
                         gesture_data_.total_gestures++;
@@ -846,7 +870,7 @@ function readGesture()
                     gesture_data_.index = 0;
                     gesture_data_.total_gestures = 0;
                 }
-                
+
             }
         } else {
     
@@ -1015,12 +1039,17 @@ function readProximity( val)
     val = [0];
     
     /* Read value from proximity data register */
-    if( !wireReadDataByte(APDS9960_PDATA, val) ) {
+    if( !wireReadDataByte(PDATA, val) ) {
         return false;
     }
     
     return true;
 }
+
+function readProximity2() {
+  return i2c.readReg(PDATA);
+}
+
 
 /*******************************************************************************
  * High-level gesture controls
@@ -1044,7 +1073,7 @@ function resetGestureParameters()
     gesture_far_count_ = 0;
     
     gesture_state_ = 0;
-    gesture_motion_ = DIR_NONE;
+    gesture_motion_ = DIR.DIR_NONE;
 }
 
 /**
@@ -1076,7 +1105,7 @@ function processGestureData()
     }
     
     /* Check to make sure our data isn't out of bounds */
-    if( (gesture_data_.total_gestures <= 32) && \
+    if( (gesture_data_.total_gestures <= 32) && 
         (gesture_data_.total_gestures > 0) ) {
         
         /* Find the first value in U/D/L/R above the threshold */
@@ -1095,7 +1124,7 @@ function processGestureData()
         }
         
         /* If one of the _first values is 0, then there is no good data */
-        if( (u_first == 0) || (d_first == 0) || \
+        if( (u_first == 0) || (d_first == 0) || 
             (l_first == 0) || (r_first == 0) ) {
             
             return false;
@@ -1199,7 +1228,7 @@ function processGestureData()
     
     /* Determine Near/Far gesture */
     if( (gesture_ud_count_ == 0) && (gesture_lr_count_ == 0) ) {
-        if( (abs(ud_delta) < GESTURE_SENSITIVITY_2) && \
+        if( (abs(ud_delta) < GESTURE_SENSITIVITY_2) && 
             (abs(lr_delta) < GESTURE_SENSITIVITY_2) ) {
             
             if( (ud_delta == 0) && (lr_delta == 0) ) {
@@ -1210,15 +1239,15 @@ function processGestureData()
             
             if( (gesture_near_count_ >= 10) && (gesture_far_count_ >= 2) ) {
                 if( (ud_delta == 0) && (lr_delta == 0) ) {
-                    gesture_state_ = NEAR_STATE;
+                    gesture_state_ = STA.NEAR_STATE;
                 } else if( (ud_delta != 0) && (lr_delta != 0) ) {
-                    gesture_state_ = FAR_STATE;
+                    gesture_state_ = STA.FAR_STATE;
                 }
                 return true;
             }
         }
     } else {
-        if( (abs(ud_delta) < GESTURE_SENSITIVITY_2) && \
+        if( (abs(ud_delta) < GESTURE_SENSITIVITY_2) && 
             (abs(lr_delta) < GESTURE_SENSITIVITY_2) ) {
                 
             if( (ud_delta == 0) && (lr_delta == 0) ) {
@@ -1257,46 +1286,46 @@ function processGestureData()
 function decodeGesture()
 {
     /* Return if near or far event is detected */
-    if( gesture_state_ == NEAR_STATE ) {
-        gesture_motion_ = DIR_NEAR;
+    if( gesture_state_ == STA.NEAR_STATE ) {
+        gesture_motion_ = DIR.DIR_NEAR;
         return true;
-    } else if ( gesture_state_ == FAR_STATE ) {
-        gesture_motion_ = DIR_FAR;
+    } else if ( gesture_state_ == STA.FAR_STATE ) {
+        gesture_motion_ = DIR.DIR_FAR;
         return true;
     }
     
     /* Determine swipe direction */
     if( (gesture_ud_count_ == -1) && (gesture_lr_count_ == 0) ) {
-        gesture_motion_ = DIR_UP;
+        gesture_motion_ = DIR.DIR_UP;
     } else if( (gesture_ud_count_ == 1) && (gesture_lr_count_ == 0) ) {
-        gesture_motion_ = DIR_DOWN;
+        gesture_motion_ = DIR.DIR_DOWN;
     } else if( (gesture_ud_count_ == 0) && (gesture_lr_count_ == 1) ) {
-        gesture_motion_ = DIR_RIGHT;
+        gesture_motion_ = DIR.DIR_RIGHT;
     } else if( (gesture_ud_count_ == 0) && (gesture_lr_count_ == -1) ) {
-        gesture_motion_ = DIR_LEFT;
+        gesture_motion_ = DIR.DIR_LEFT;
     } else if( (gesture_ud_count_ == -1) && (gesture_lr_count_ == 1) ) {
         if( abs(gesture_ud_delta_) > abs(gesture_lr_delta_) ) {
-            gesture_motion_ = DIR_UP;
+            gesture_motion_ = DIR.DIR_UP;
         } else {
-            gesture_motion_ = DIR_RIGHT;
+            gesture_motion_ = DIR.DIR_RIGHT;
         }
     } else if( (gesture_ud_count_ == 1) && (gesture_lr_count_ == -1) ) {
         if( abs(gesture_ud_delta_) > abs(gesture_lr_delta_) ) {
-            gesture_motion_ = DIR_DOWN;
+            gesture_motion_ = DIR.DIR_DOWN;
         } else {
-            gesture_motion_ = DIR_LEFT;
+            gesture_motion_ = DIR.DIR_LEFT;
         }
     } else if( (gesture_ud_count_ == -1) && (gesture_lr_count_ == -1) ) {
         if( abs(gesture_ud_delta_) > abs(gesture_lr_delta_) ) {
-            gesture_motion_ = DIR_UP;
+            gesture_motion_ = DIR.DIR_UP;
         } else {
-            gesture_motion_ = DIR_LEFT;
+            gesture_motion_ = DIR.DIR_LEFT;
         }
     } else if( (gesture_ud_count_ == 1) && (gesture_lr_count_ == 1) ) {
         if( abs(gesture_ud_delta_) > abs(gesture_lr_delta_) ) {
-            gesture_motion_ = DIR_DOWN;
+            gesture_motion_ = DIR.DIR_DOWN;
         } else {
-            gesture_motion_ = DIR_RIGHT;
+            gesture_motion_ = DIR.DIR_RIGHT;
         }
     } else {
         return false;
@@ -1388,12 +1417,12 @@ function getLEDDrive()
     var val = [0];
     
     /* Read value from CONTROL register */
-    if( !wireReadDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireReadDataByte(CONTROL, val) ) {
         return ERROR;
     }
     
     /* Shift and mask out LED drive bits */
-    val[0] = (val[0] >> 6) & 0b00000011;
+    val[0] = (val[0] >> 6) & ((1 << 1) +1);/*0b00000011*/
     
     return val;
 }
@@ -1415,18 +1444,18 @@ function setLEDDrive( drive)
     var val = [0];
     
     /* Read value from CONTROL register */
-    if( !wireReadDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireReadDataByte(CONTROL, val) ) {
         return false;
     }
     
     /* Set bits in register to given value */
-    drive &= 0b00000011;
+    drive &= ((1 << 1) +1);
     drive = drive << 6;
-    val[0] &= 0b00111111;
+    val[0] &= ((1<<5)+(1<<4)+(1<<3)+(1<<2)+(1<<1)+1);//0b00111111;
     val[0] |= drive;
     
     /* Write register value back into CONTROL register */
-    if( !wireWriteDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireWriteDataByte(CONTROL, val) ) {
         return false;
     }
     
@@ -1446,15 +1475,15 @@ function setLEDDrive( drive)
  */
 function getProximityGain()
 {
-    var val[0];
+    var val= [0];
     
     /* Read value from CONTROL register */
-    if( !wireReadDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireReadDataByte(CONTROL, val) ) {
         return ERROR;
     }
     
     /* Shift and mask out PDRIVE bits */
-    val[0] = (val[0] >> 2) & 0b00000011;
+    val[0] = (val[0] >> 2) & ((1 << 1) +1)//0b00000011;
     
     return val[0];
 }
@@ -1476,18 +1505,18 @@ function setProximityGain( drive)
     var val = [0];
     
     /* Read value from CONTROL register */
-    if( !wireReadDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireReadDataByte(CONTROL, val) ) {
         return false;
     }
     
     /* Set bits in register to given value */
-    drive &= 0b00000011;
+    drive &= ((1 << 1) +1)//0b00000011;
     drive = drive << 2;
-    val[0] &= 0b11110011;
+    val[0] &= ((1<<7)+(1<<6)+(1<<5)+(1<<4)+(1<<1)+1)//0b11110011;
     val[0] |= drive;
     
     /* Write register value back into CONTROL register */
-    if( !wireWriteDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireWriteDataByte(CONTROL, val) ) {
         return false;
     }
     
@@ -1510,12 +1539,12 @@ function getAmbientLightGain()
     var val = [0];
     
     /* Read value from CONTROL register */
-    if( !wireReadDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireReadDataByte(CONTROL, val) ) {
         return ERROR;
     }
     
     /* Shift and mask out ADRIVE bits */
-    val[0] &= 0b00000011;
+    val[0] &= ((1<<1)+1);//0b00000011;
     
     return val;
 }
@@ -1537,17 +1566,17 @@ function setAmbientLightGain( drive)
     var val = [0];
     
     /* Read value from CONTROL register */
-    if( !wireReadDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireReadDataByte(CONTROL, val) ) {
         return false;
     }
     
     /* Set bits in register to given value */
-    drive &= 0b00000011;
-    val[0] &= 0b11111100;
+    drive &= ((1<<1)+1);//0b00000011;
+    val[0] &= ((1<<7)+(1<<6)+(1<<5)+(1<<4)+(1<<3)+(1<<2));//0b11111100;
     val[0] |= drive;
     
     /* Write register value back into CONTROL register */
-    if( !wireWriteDataByte(APDS9960_CONTROL, val) ) {
+    if( !wireWriteDataByte(CONTROL, val) ) {
         return false;
     }
     
@@ -1575,7 +1604,7 @@ function getLEDBoost()
     }
     
     /* Shift and mask out LED_BOOST bits */
-    val[0] = (val[0] >> 4) & 0b00000011;
+    val[0] = (val[0] >> 4) & ((1<<1)+1);//0b00000011;
     
     return val;
 }
@@ -1602,9 +1631,9 @@ function setLEDBoost( boost)
     }
     
     /* Set bits in register to given value */
-    boost &= 0b00000011;
+    boost &= ((1<<1)+1);//0b00000011;
     boost = boost << 4;
-    val[0] &= 0b11001111;
+    val[0] &= ((1<<7)+(1<<6)+(1<<3)+(1<<2)+(1<<1)+1);//0b11001111;
     val[0] |= boost;
     
     /* Write register value back into CONFIG2 register */
@@ -1630,7 +1659,7 @@ function getProxGainCompEnable()
     }
     
     /* Shift and mask out PCMP bits */
-    val[0] = (val[0] >> 5) & 0b00000001;
+    val[0] = (val[0] >> 5) & 1;//0b00000001;
     
     return val[0];
 }
@@ -1651,9 +1680,9 @@ function getProxGainCompEnable()
     }
     
     /* Set bits in register to given value */
-    enable &= 0b00000001;
+    enable &= 1;//0b00000001;
     enable = enable << 5;
-    val[0] &= 0b11011111;
+    val[0] &= ((1<<7)+(1<<6)+(1<<4)+(1<<3)+(1<<2)+(1<<1)+1);//0b11011111;
     val[0] |= enable;
     
     /* Write register value back into CONFIG3 register */
@@ -1686,7 +1715,7 @@ function getProxPhotoMask()
     }
     
     /* Mask out photodiode enable mask bits */
-    val[0] &= 0b00001111;
+    val[0] &= ((1<<3)+(1<<2)+(1<<1)+1);//0b00001111;
     
     return val[0];
 }
@@ -1706,7 +1735,7 @@ function getProxPhotoMask()
  */
 function setProxPhotoMask( mask)
 {
-    var val[0];
+    var val= [0];
     
     /* Read value from CONFIG3 register */
     if( !wireReadDataByte(CONFIG3, val) ) {
@@ -1714,8 +1743,8 @@ function setProxPhotoMask( mask)
     }
     
     /* Set bits in register to given value */
-    mask &= 0b00001111;
-    val[0] &= 0b11110000;
+    mask &= ((1<<3)+(1<<2)+(1<<1)+1);//0b00001111;
+    val[0] &= ((1<<7)+(1<<6)+(1<<5)+(1<<4));//0b11110000;
     val[0] |= mask;
     
     /* Write register value back into CONFIG3 register */
@@ -1811,7 +1840,7 @@ function getGestureGain()
     }
     
     /* Shift and mask out GGAIN bits */
-    val[0] = (val[0] >> 5) & 0b00000011;
+    val[0] = (val[0] >> 5) & ((1<<1)+1);//0b00000011;
     
     return val[0];
 }
@@ -1838,9 +1867,9 @@ function setGestureGain( gain)
     }
     
     /* Set bits in register to given value */
-    gain &= 0b00000011;
+    gain &= ((1<<1)+1);//0b00000011;
     gain = gain << 5;
-    val[0] &= 0b10011111;
+    val[0] &= ((1<<7)+(1<<4)+(1<<3)+(1<<2)+(1<<1)+1);//0b10011111;
     val[0] |= gain;
     
     /* Write register value back into GCONF2 register */
@@ -1872,7 +1901,7 @@ function getGestureLEDDrive()
     }
     
     /* Shift and mask out GLDRIVE bits */
-    val[0] = (val[0] >> 3) & 0b00000011;
+    val[0] = (val[0] >> 3) & ((1<<1)+1);//0b00000011;
     
     return val;
 }
@@ -1899,9 +1928,9 @@ function setGestureLEDDrive( drive)
     }
     
     /* Set bits in register to given value */
-    drive &= 0b00000011;
+    drive &= ((1<<1)+1);//0b00000011;
     drive = drive << 3;
-    val[0] &= 0b11100111;
+    val[0] &= ((1<<7)+(1<<6)+(1<<5)+(1<<2)+(1<<1)+1);//0b11100111;
     val[0] |= drive;
     
     /* Write register value back into GCONF2 register */
@@ -1937,7 +1966,7 @@ function getGestureWaitTime()
     }
     
     /* Mask out GWTIME bits */
-    val[0] &= 0b00000111;
+    val[0] &= ((1<<2)+(1<<1)+1);//0b00000111;
     
     return val;
 }
@@ -1968,8 +1997,8 @@ function setGestureWaitTime( time)
     }
     
     /* Set bits in register to given value */
-    time &= 0b00000111;
-    val[0] &= 0b11111000;
+    time &= ((1<<2)+(1<<1)+1);//0b00000111;
+    val[0] &= ((1<<7)+(1<<6)+(1<<5)+(1<<4)+(1<<3));//0b11111000;
     val[0] |= time;
     
     /* Write register value back into GCONF2 register */
@@ -2173,7 +2202,7 @@ function getAmbientLightIntEnable()
     }
     
     /* Shift and mask out AIEN bit */
-    val[0] = (val[0] >> 4) & 0b00000001;
+    val[0] = (val[0] >> 4) & 1;//0b00000001;
     
     return val[0];
 }
@@ -2194,9 +2223,9 @@ function setAmbientLightIntEnable( enable)
     }
     
     /* Set bits in register to given value */
-    enable &= 0b00000001;
+    enable &= 1;//0b00000001;
     enable = enable << 4;
-    val[0] &= 0b11101111;
+    val[0] &= ((1<<7)+(1<<6)+(1<<5)+(1<<3)+(1<<2)+(1<<1)+1);//0b11101111;
     val[0] |= enable;
     
     /* Write register value back into ENABLE register */
@@ -2222,7 +2251,7 @@ function getProximityIntEnable()
     }
     
     /* Shift and mask out PIEN bit */
-    val[0] = (val[0] >> 5) & 0b00000001;
+    val[0] = (val[0] >> 5) & 1;//0b00000001;
     
     return val;
 }
@@ -2243,9 +2272,9 @@ function setProximityIntEnable( enable)
     }
     
     /* Set bits in register to given value */
-    enable &= 0b00000001;
+    enable &= 1;//0b00000001;
     enable = enable << 5;
-    val[0] &= 0b11011111;
+    val[0] &= ((1<<7)+(1<<6)+(1<<4)+(1<<3)+(1<<2)+(1<<1)+1);//0b11011111;
     val[0] |= enable;
     
     /* Write register value back into ENABLE register */
@@ -2271,7 +2300,7 @@ function getGestureIntEnable()
     }
     
     /* Shift and mask out GIEN bit */
-    val[0] = (val[0] >> 1) & 0b00000001;
+    val[0] = (val[0] >> 1) & 1;//0b00000001;
     
     return val[0];
 }
@@ -2292,9 +2321,9 @@ function setGestureIntEnable( enable)
     }
     
     /* Set bits in register to given value */
-    enable &= 0b00000001;
+    enable &= 1;//0b00000001;
     enable = enable << 1;
-    val[0] &= 0b11111101;
+    val[0] &= ((1<<7)+(1<<6)+(1<<5)+(1<<4)+(1<<3)+(1<<2)+1);//0b11111101;
     val[0] |= enable;
     
     /* Write register value back into GCONF4 register */
@@ -2350,7 +2379,7 @@ function getGestureMode()
     }
     
     /* Mask out GMODE bit */
-    val[0] &= 0b00000001;
+    val[0] &= 1;//0b00000001;
     
     return val[0];
 }
@@ -2371,8 +2400,8 @@ function setGestureMode( mode)
     }
     
     /* Set bits in register to given value */
-    mode &= 0b00000001;
-    val[0] &= 0b11111110;
+    mode &= 1;//0b00000001;
+    val[0] &= ((1<<7)+(1<<6)+(1<<5)+(1<<4)+(1<<3)+(1<<2)+(1<<1));//0b11111110;
     val[0] |= mode;
     
     /* Write register value back into GCONF4 register */
@@ -2382,3 +2411,53 @@ function setGestureMode( mode)
     
     return true;
 }
+
+
+
+
+
+
+var proximity_data = 0;
+
+  console.log("------------------------------------");
+  console.log("SparkFun APDS-9960 - ProximitySensor");
+  console.log("------------------------------------");
+  
+  // Initialize APDS-9960 (configure I2C and initial values)
+  if ( init() ) {
+    console.log("APDS-9960 initialization complete");
+  } else {
+    console.log("Something went wrong during APDS-9960 init!");
+  }
+  
+  // Adjust the Proximity sensor gain
+  if ( !setProximityGain(PGAIN_2X) ) {
+    console.log("Something went wrong trying to set PGAIN");
+  }
+  
+  // Start running the APDS-9960 proximity sensor (no interrupts)
+  if ( enableProximitySensor(false) ) {
+    console.log("Proximity sensor is now running");
+  } else {
+    console.log("Something went wrong during sensor init!");
+  }
+
+var loopDelay = 250;
+
+setInterval(function(){
+  
+  // Read the proximity value
+  if ( !readProximity(proximity_data) ) {
+    console.log("Error reading proximity value");
+  } else {
+    console.log("Proximity: ");
+    console.log(proximity_data);
+    var pro = readProximity2();
+    console.log(pro);
+      
+  }
+  
+},loopDelay);
+
+
+
